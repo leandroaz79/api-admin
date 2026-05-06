@@ -107,7 +107,7 @@ router.post('/', async (req, res) => {
     console.log('[LICENSE CREATE] Success! License ID:', license.id, 'Account ID:', license.account_id);
 
     // Return response with plain key (only time it's visible)
-    res.status(201).json({
+    const response = {
       license: {
         id: license.id,
         tenant_id: license.tenant_id,
@@ -121,7 +121,11 @@ router.post('/', async (req, res) => {
         ANTHROPIC_BASE_URL: 'https://api-gw.techsysbr.space/v1',
         ANTHROPIC_AUTH_TOKEN: apiKey
       }
-    });
+    };
+
+    console.log('[LICENSE CREATE] Returning api_key:', apiKey.substring(0, 15) + '...');
+
+    res.status(201).json(response);
   } catch (err) {
     console.error('[LICENSE CREATE EXCEPTION]', err);
     res.status(500).json({ error: 'Internal server error' });
