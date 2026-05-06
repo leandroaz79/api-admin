@@ -115,6 +115,8 @@ router.get('/', async (req, res) => {
       return res.status(403).json({ error: 'Use tenant credentials to list licenses' });
     }
 
+    console.log('[LICENSE LIST] Fetching licenses for tenant:', req.tenant.id);
+
     const { data, error } = await supabase
       .from('licenses')
       .select(`
@@ -124,33 +126,54 @@ router.get('/', async (req, res) => {
         status,
         expires_at,
         created_at,
-        api_key_encrypted,
-        account:accounts(id, name, email, whatsapp)
+        accounts (
+          name,
+          email,
+          whatsapp
+        )
       `)
       .eq('tenant_id', req.tenant.id)
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('List licenses error:', error);
-      return res.status(500).json({ error: 'Failed to list licenses' });
+      console.error('[LICENSE LIST ERROR]', {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code,
+        tenant_id: req.tenant.id
+      });
+      return res.status(500).json({
+        error: 'Failed to list licenses',
+        details: error.message
+      });
     }
 
-    // Format response with masked API key
+    console.log('[LICENSE LIST] Found', data?.length || 0, 'licenses');
+
+    // Format response with safe fallbacks
     const formattedData = data.map(license => ({
       id: license.id,
-      client_name: license.account?.name || 'N/A',
-      email: license.account?.email || 'N/A',
-      whatsapp: license.account?.whatsapp || null,
+      client_name: license.accounts?.name || 'N/A',
+      email: license.accounts?.email || 'N/A',
+      whatsapp: license.accounts?.whatsapp || null,
       status: license.status,
       expires_at: license.expires_at,
       created_at: license.created_at,
-      api_key_masked: license.api_key_encrypted ? 'lk_live_****' : 'N/A'
+      api_key_masked: 'lk_live_****'
     }));
 
     res.json(formattedData);
   } catch (err) {
-    console.error('List licenses exception:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('[LICENSE LIST EXCEPTION]', {
+      message: err.message,
+      stack: err.stack,
+      tenant_id: req.tenant?.id
+    });
+    res.status(500).json({
+      error: 'Internal server error',
+      details: err.message
+    });
   }
 });
 
