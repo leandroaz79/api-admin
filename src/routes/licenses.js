@@ -12,22 +12,40 @@ router.post('/', async (req, res) => {
       return res.status(403).json({ error: 'Use tenant credentials to create licenses' });
     }
 
-    const { name, email, whatsapp, expires_at } = req.body;
+    const { name, email, whatsapp, expires_at, duration } = req.body;
 
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
     }
 
-    if (!expires_at) {
-      return res.status(400).json({ error: 'expires_at is required' });
+    // Calculate expiration date
+    let expiresDate;
+
+    // Backward compatibility: if expires_at is provided, use it
+    if (expires_at) {
+      expiresDate = new Date(expires_at);
+      if (isNaN(expiresDate.getTime())) {
+        return res.status(400).json({ error: 'Invalid expires_at date' });
+      }
+    }
+    // Otherwise, use duration (default: 30 days)
+    else {
+      const durationDays = duration || 30;
+
+      // Validate duration (only allow: 1, 30, 90, 365)
+      const validDurations = [1, 30, 90, 365];
+      if (!validDurations.includes(durationDays)) {
+        return res.status(400).json({
+          error: 'Invalid duration',
+          message: 'Duration must be one of: 1, 30, 90, 365 days'
+        });
+      }
+
+      expiresDate = new Date();
+      expiresDate.setDate(expiresDate.getDate() + durationDays);
     }
 
-    const expiresDate = new Date(expires_at);
-    if (isNaN(expiresDate.getTime())) {
-      return res.status(400).json({ error: 'Invalid expires_at date' });
-    }
-
-    console.log('[LICENSE CREATE] Starting for tenant:', req.tenant.id, 'email:', email);
+    console.log('[LICENSE CREATE] Starting for tenant:', req.tenant.id, 'email:', email, 'expires:', expiresDate.toISOString());
 
     // STEP 1: Find or create account
     const { data: existingAccount } = await supabase
