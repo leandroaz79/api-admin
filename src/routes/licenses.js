@@ -2,6 +2,7 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const { generateApiKeyWithHash } = require('../services/keyGenerator');
 const licenseCache = require('../utils/cache');
+const { encrypt, decrypt } = require('../utils/encryption');
 
 const router = express.Router();
 
@@ -63,6 +64,9 @@ router.post('/', async (req, res) => {
     // Generate API key with hash
     const { key: apiKey, hash: apiKeyHash } = generateApiKeyWithHash();
 
+    // Encrypt API key for secure storage
+    const apiKeyEncrypted = encrypt(apiKey);
+
     // Create license
     const { data: license, error: licenseError } = await supabase
       .from('licenses')
@@ -70,6 +74,7 @@ router.post('/', async (req, res) => {
         tenant_id: req.tenant.id,
         account_id: account.id,
         api_key_hash: apiKeyHash,
+        api_key_encrypted: apiKeyEncrypted,
         expires_at: expiresDate.toISOString(),
         status: 'active'
       })
@@ -91,6 +96,7 @@ router.post('/', async (req, res) => {
         expires_at: license.expires_at,
         created_at: license.created_at
       },
+      api_key: apiKey,
       config: {
         ANTHROPIC_BASE_URL: 'https://api-gw.techsysbr.space/v1',
         ANTHROPIC_AUTH_TOKEN: apiKey
@@ -215,6 +221,64 @@ router.patch('/:id/renew', async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error('Renew license exception:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get license API key (view encrypted key)
+router.get('/:id/key', async (req, res) => {
+  try {
+    if (req.isMasterAdmin) {
+      return res.status(403).json({ error: 'Use tenant credentials to view license keys' });
+    }
+
+    const { id } = req.params;
+
+    // Fetch license with encrypted key
+    const { data: license, error } = await supabase
+      .from('licenses')
+      .select('id, api_key_encrypted, status')
+      .eq('id', id)
+      .eq('tenant_id', req.tenant.id)
+      .single();
+
+    if (error || !license) {
+      return res.status(404).json({ error: 'License not found' });
+    }
+
+    if (!license.api_key_encrypted) {
+      return res.status(404).json({ error: 'API key not available (legacy license)' });
+    }
+
+    // Decrypt API key
+    const apiKey = decrypt(license.api_key_encrypted);
+
+    // Log key view event
+    console.log('[KEY VIEWED]', {
+      license_id: license.id,
+      tenant_id: req.tenant.id,
+      timestamp: new Date().toISOString()
+    });
+
+    // Optional: Log to database
+    await supabase
+      .from('usage_logs')
+      .insert({
+        tenant_id: req.tenant.id,
+        license_id: license.id,
+        model: 'key_view',
+        tokens_prompt: null,
+        tokens_completion: null
+      })
+      .select();
+
+    res.json({
+      api_key: apiKey,
+      license_id: license.id,
+      status: license.status
+    });
+  } catch (err) {
+    console.error('View license key exception:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
