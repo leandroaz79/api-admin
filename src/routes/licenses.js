@@ -152,16 +152,25 @@ router.get('/', async (req, res) => {
     console.log('[LICENSE LIST] Found', data?.length || 0, 'licenses');
 
     // Format response with safe fallbacks
-    const formattedData = data.map(license => ({
-      id: license.id,
-      client_name: license.accounts?.name || 'N/A',
-      email: license.accounts?.email || 'N/A',
-      whatsapp: license.accounts?.whatsapp || null,
-      status: license.status,
-      expires_at: license.expires_at,
-      created_at: license.created_at,
-      api_key_masked: 'lk_live_****'
-    }));
+    const formattedData = data.map(license => {
+      // Debug log to verify correct IDs
+      console.log('[LICENSE LIST ITEM]', {
+        license_id: license.id,
+        account_id: license.account_id,
+        tenant_id: license.tenant_id
+      });
+
+      return {
+        id: license.id, // MUST be licenses.id (UUID)
+        client_name: license.accounts?.name || '—',
+        email: license.accounts?.email || '—',
+        whatsapp: license.accounts?.whatsapp || null,
+        status: license.status,
+        expires_at: license.expires_at,
+        created_at: license.created_at,
+        api_key_masked: '••••••••'
+      };
+    });
 
     res.json(formattedData);
   } catch (err) {
@@ -269,17 +278,45 @@ router.get('/:id/key', async (req, res) => {
 
     const { id } = req.params;
 
+    console.log('[KEY VIEW REQUEST]', {
+      license_id: id,
+      tenant_id: req.tenant.id,
+      timestamp: new Date().toISOString()
+    });
+
     // Fetch license with encrypted key and plaintext fallback
     const { data: license, error } = await supabase
       .from('licenses')
-      .select('id, api_key_encrypted, api_key, status')
+      .select('id, api_key_encrypted, api_key, status, tenant_id')
       .eq('id', id)
       .eq('tenant_id', req.tenant.id)
       .single();
 
+    if (error) {
+      console.error('[KEY VIEW ERROR]', {
+        license_id: id,
+        tenant_id: req.tenant.id,
+        error_message: error.message,
+        error_code: error.code,
+        error_details: error.details
+      });
+    }
+
     if (error || !license) {
+      console.log('[KEY VIEW 404]', {
+        license_id: id,
+        tenant_id: req.tenant.id,
+        found: !!license
+      });
       return res.status(404).json({ error: 'License not found' });
     }
+
+    console.log('[KEY VIEW FOUND]', {
+      license_id: license.id,
+      has_encrypted: !!license.api_key_encrypted,
+      has_plaintext: !!license.api_key,
+      status: license.status
+    });
 
     let apiKey;
 
@@ -287,6 +324,7 @@ router.get('/:id/key', async (req, res) => {
     if (license.api_key_encrypted) {
       try {
         apiKey = decrypt(license.api_key_encrypted);
+        console.log('[KEY VIEW] Decrypted encrypted key successfully');
       } catch (decryptError) {
         console.error('[DECRYPT ERROR]', decryptError.message);
         return res.status(500).json({ error: 'Failed to decrypt API key' });
@@ -299,11 +337,12 @@ router.get('/:id/key', async (req, res) => {
     }
     // No key available
     else {
+      console.log('[KEY VIEW] No key available for license:', license.id);
       return res.status(404).json({ error: 'API key not available' });
     }
 
     // Audit log
-    console.log(`[KEY VIEW] License ${id} viewed by tenant ${req.tenant.id} at ${new Date().toISOString()}`);
+    console.log(`[KEY VIEW SUCCESS] License ${id} viewed by tenant ${req.tenant.id} at ${new Date().toISOString()}`);
 
     // Optional: Log to database
     await supabase
@@ -325,7 +364,12 @@ router.get('/:id/key', async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('View license key exception:', err);
+    console.error('[KEY VIEW EXCEPTION]', {
+      message: err.message,
+      stack: err.stack,
+      license_id: req.params.id,
+      tenant_id: req.tenant?.id
+    });
     res.status(500).json({ error: 'Internal server error' });
   }
 });
