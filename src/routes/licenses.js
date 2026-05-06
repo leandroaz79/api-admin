@@ -1,8 +1,7 @@
 const express = require('express');
 const supabase = require('../config/supabase');
-const { generateApiKeyWithHash } = require('../services/keyGenerator');
+const { generateApiKey } = require('../services/keyGenerator');
 const licenseCache = require('../utils/cache');
-const { encrypt, decrypt } = require('../utils/encryption');
 
 const router = express.Router();
 
@@ -64,13 +63,10 @@ router.post('/', async (req, res) => {
       console.log('[LICENSE CREATE] Created new account:', accountId);
     }
 
-    // STEP 2: Generate API key with hash
-    const { key: apiKey, hash: apiKeyHash } = generateApiKeyWithHash();
+    // STEP 2: Generate API key (plaintext only)
+    const apiKey = generateApiKey();
 
-    // STEP 3: Encrypt API key for secure storage
-    const apiKeyEncrypted = encrypt(apiKey);
-
-    // STEP 4: Create license with account_id
+    // STEP 3: Create license with account_id
     console.log('[LICENSE CREATE] Creating license with account_id:', accountId);
 
     const { data: license, error: licenseError } = await supabase
@@ -78,8 +74,7 @@ router.post('/', async (req, res) => {
       .insert({
         tenant_id: req.tenant.id,
         account_id: accountId,
-        api_key_hash: apiKeyHash,
-        api_key_encrypted: apiKeyEncrypted,
+        api_key: apiKey,
         expires_at: expiresDate.toISOString(),
         status: 'active'
       })
@@ -311,7 +306,7 @@ router.patch('/:id/renew', async (req, res) => {
   }
 });
 
-// Get license API key (view encrypted key)
+// Get license API key (view key)
 router.get('/:id/key', async (req, res) => {
   try {
     if (req.isMasterAdmin) {
@@ -326,10 +321,10 @@ router.get('/:id/key', async (req, res) => {
       timestamp: new Date().toISOString()
     });
 
-    // Fetch license with encrypted key and plaintext fallback
+    // Fetch license with api_key
     const { data: license, error } = await supabase
       .from('licenses')
-      .select('id, api_key_encrypted, api_key, status, tenant_id')
+      .select('id, api_key, status, tenant_id')
       .eq('id', id)
       .eq('tenant_id', req.tenant.id)
       .single();
@@ -355,30 +350,11 @@ router.get('/:id/key', async (req, res) => {
 
     console.log('[KEY VIEW FOUND]', {
       license_id: license.id,
-      has_encrypted: !!license.api_key_encrypted,
-      has_plaintext: !!license.api_key,
+      has_api_key: !!license.api_key,
       status: license.status
     });
 
-    let apiKey;
-
-    // Try encrypted key first (new licenses)
-    if (license.api_key_encrypted) {
-      try {
-        apiKey = decrypt(license.api_key_encrypted);
-        console.log('[KEY VIEW] Decrypted encrypted key successfully');
-      } catch (decryptError) {
-        console.error('[DECRYPT ERROR]', decryptError.message);
-        return res.status(500).json({ error: 'Failed to decrypt API key' });
-      }
-    }
-    // Fallback to plaintext (legacy licenses - backward compatibility)
-    else if (license.api_key) {
-      apiKey = license.api_key;
-      console.log('[KEY VIEW] Using plaintext fallback for legacy license:', license.id);
-    }
-    // No key available
-    else {
+    if (!license.api_key) {
       console.log('[KEY VIEW] No key available for license:', license.id);
       return res.status(404).json({ error: 'API key not available' });
     }
@@ -399,10 +375,10 @@ router.get('/:id/key', async (req, res) => {
       .select();
 
     res.json({
-      api_key: apiKey,
+      api_key: license.api_key,
       config: {
         ANTHROPIC_BASE_URL: 'https://api-gw.techsysbr.space/v1',
-        ANTHROPIC_AUTH_TOKEN: apiKey
+        ANTHROPIC_AUTH_TOKEN: license.api_key
       }
     });
   } catch (err) {
