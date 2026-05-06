@@ -28,21 +28,23 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Invalid expires_at date' });
     }
 
-    // Find or create account
-    let { data: account, error: accountError } = await supabase
+    console.log('[LICENSE CREATE] Starting for tenant:', req.tenant.id, 'email:', email);
+
+    // STEP 1: Find or create account
+    const { data: existingAccount } = await supabase
       .from('accounts')
-      .select('*')
+      .select('id, name, email')
       .eq('email', email)
       .eq('tenant_id', req.tenant.id)
       .single();
 
-    if (accountError && accountError.code !== 'PGRST116') {
-      console.error('Account lookup error:', accountError);
-      return res.status(500).json({ error: 'Failed to lookup account' });
-    }
+    let accountId;
 
-    if (!account) {
-      const { data: newAccount, error: createError } = await supabase
+    if (existingAccount) {
+      accountId = existingAccount.id;
+      console.log('[LICENSE CREATE] Using existing account:', accountId);
+    } else {
+      const { data: newAccount, error: accountError } = await supabase
         .from('accounts')
         .insert({
           tenant_id: req.tenant.id,
@@ -53,26 +55,29 @@ router.post('/', async (req, res) => {
         .select()
         .single();
 
-      if (createError) {
-        console.error('Create account error:', createError);
+      if (accountError) {
+        console.error('[LICENSE CREATE] Account creation error:', accountError);
         return res.status(500).json({ error: 'Failed to create account' });
       }
 
-      account = newAccount;
+      accountId = newAccount.id;
+      console.log('[LICENSE CREATE] Created new account:', accountId);
     }
 
-    // Generate API key with hash
+    // STEP 2: Generate API key with hash
     const { key: apiKey, hash: apiKeyHash } = generateApiKeyWithHash();
 
-    // Encrypt API key for secure storage
+    // STEP 3: Encrypt API key for secure storage
     const apiKeyEncrypted = encrypt(apiKey);
 
-    // Create license
+    // STEP 4: Create license with account_id
+    console.log('[LICENSE CREATE] Creating license with account_id:', accountId);
+
     const { data: license, error: licenseError } = await supabase
       .from('licenses')
       .insert({
         tenant_id: req.tenant.id,
-        account_id: account.id,
+        account_id: accountId,
         api_key_hash: apiKeyHash,
         api_key_encrypted: apiKeyEncrypted,
         expires_at: expiresDate.toISOString(),
@@ -82,9 +87,11 @@ router.post('/', async (req, res) => {
       .single();
 
     if (licenseError) {
-      console.error('Create license error:', licenseError);
+      console.error('[LICENSE CREATE] License creation error:', licenseError);
       return res.status(500).json({ error: 'Failed to create license' });
     }
+
+    console.log('[LICENSE CREATE] Success! License ID:', license.id, 'Account ID:', license.account_id);
 
     // Return response with plain key (only time it's visible)
     res.status(201).json({
@@ -103,7 +110,7 @@ router.post('/', async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('Create license exception:', err);
+    console.error('[LICENSE CREATE EXCEPTION]', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
