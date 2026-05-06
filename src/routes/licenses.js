@@ -152,12 +152,30 @@ router.get('/', async (req, res) => {
     }
 
     // SECOND query: Get accounts separately
-    const accountIds = licenses.map(l => l.account_id);
+    const accountIds = licenses
+      .map(l => l.account_id)
+      .filter(Boolean);
 
-    const { data: accounts } = await supabase
-      .from('accounts')
-      .select('id, name, email, whatsapp')
-      .in('id', accountIds);
+    console.log('[LICENSE LIST] Account IDs:', accountIds);
+
+    let accounts = [];
+
+    if (accountIds.length > 0) {
+      const { data, error } = await supabase
+        .from('accounts')
+        .select('id, name, email, whatsapp')
+        .in('id', accountIds);
+
+      if (error) {
+        console.error('[ACCOUNTS FETCH ERROR]', error);
+      }
+
+      accounts = data || [];
+
+      console.log('[ACCOUNTS FETCH RESULT]', accounts);
+    } else {
+      console.log('[ACCOUNTS FETCH] No account IDs found');
+    }
 
     // Create accounts map for fast lookup
     const accountsMap = {};
@@ -176,6 +194,12 @@ router.get('/', async (req, res) => {
         license_id: license.id,
         account_id: license.account_id,
         tenant_id: license.tenant_id
+      });
+
+      console.log('[MAPPING]', {
+        license_id: license.id,
+        account_id: license.account_id,
+        found_account: !!acc
       });
 
       return {
