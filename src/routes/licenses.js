@@ -246,10 +246,10 @@ router.get('/:id/key', async (req, res) => {
 
     const { id } = req.params;
 
-    // Fetch license with encrypted key
+    // Fetch license with encrypted key and plaintext fallback
     const { data: license, error } = await supabase
       .from('licenses')
-      .select('id, api_key_encrypted, status')
+      .select('id, api_key_encrypted, api_key, status')
       .eq('id', id)
       .eq('tenant_id', req.tenant.id)
       .single();
@@ -258,19 +258,29 @@ router.get('/:id/key', async (req, res) => {
       return res.status(404).json({ error: 'License not found' });
     }
 
-    if (!license.api_key_encrypted) {
-      return res.status(404).json({ error: 'API key not available (legacy license)' });
+    let apiKey;
+
+    // Try encrypted key first (new licenses)
+    if (license.api_key_encrypted) {
+      try {
+        apiKey = decrypt(license.api_key_encrypted);
+      } catch (decryptError) {
+        console.error('[DECRYPT ERROR]', decryptError.message);
+        return res.status(500).json({ error: 'Failed to decrypt API key' });
+      }
+    }
+    // Fallback to plaintext (legacy licenses - backward compatibility)
+    else if (license.api_key) {
+      apiKey = license.api_key;
+      console.log('[KEY VIEW] Using plaintext fallback for legacy license:', license.id);
+    }
+    // No key available
+    else {
+      return res.status(404).json({ error: 'API key not available' });
     }
 
-    // Decrypt API key
-    const apiKey = decrypt(license.api_key_encrypted);
-
-    // Log key view event
-    console.log('[KEY VIEWED]', {
-      license_id: license.id,
-      tenant_id: req.tenant.id,
-      timestamp: new Date().toISOString()
-    });
+    // Audit log
+    console.log(`[KEY VIEW] License ${id} viewed by tenant ${req.tenant.id} at ${new Date().toISOString()}`);
 
     // Optional: Log to database
     await supabase
@@ -286,8 +296,10 @@ router.get('/:id/key', async (req, res) => {
 
     res.json({
       api_key: apiKey,
-      license_id: license.id,
-      status: license.status
+      config: {
+        ANTHROPIC_BASE_URL: 'https://api-gw.techsysbr.space/v1',
+        ANTHROPIC_AUTH_TOKEN: apiKey
+      }
     });
   } catch (err) {
     console.error('View license key exception:', err);
