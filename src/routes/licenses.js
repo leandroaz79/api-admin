@@ -117,21 +117,10 @@ router.get('/', async (req, res) => {
 
     console.log('[LICENSE LIST] Fetching licenses for tenant:', req.tenant.id);
 
-    const { data, error } = await supabase
+    // FIRST query: Get licenses
+    const { data: licenses, error } = await supabase
       .from('licenses')
-      .select(`
-        id,
-        tenant_id,
-        account_id,
-        status,
-        expires_at,
-        created_at,
-        accounts!fk_licenses_account (
-          name,
-          email,
-          whatsapp
-        )
-      `)
+      .select('id, tenant_id, account_id, status, expires_at, created_at')
       .eq('tenant_id', req.tenant.id)
       .order('created_at', { ascending: false });
 
@@ -149,10 +138,32 @@ router.get('/', async (req, res) => {
       });
     }
 
-    console.log('[LICENSE LIST] Found', data?.length || 0, 'licenses');
+    console.log('[LICENSE LIST] Found', licenses?.length || 0, 'licenses');
 
-    // Format response with safe fallbacks
-    const formattedData = data.map(license => {
+    if (!licenses || licenses.length === 0) {
+      return res.json([]);
+    }
+
+    // SECOND query: Get accounts separately
+    const accountIds = licenses.map(l => l.account_id);
+
+    const { data: accounts } = await supabase
+      .from('accounts')
+      .select('id, name, email, whatsapp')
+      .in('id', accountIds);
+
+    // Create accounts map for fast lookup
+    const accountsMap = {};
+    if (accounts) {
+      accounts.forEach(acc => {
+        accountsMap[acc.id] = acc;
+      });
+    }
+
+    // Build response with manual join
+    const result = licenses.map(license => {
+      const acc = accountsMap[license.account_id];
+
       // Debug log to verify correct IDs
       console.log('[LICENSE LIST ITEM]', {
         license_id: license.id,
@@ -162,9 +173,9 @@ router.get('/', async (req, res) => {
 
       return {
         id: license.id, // MUST be licenses.id (UUID)
-        client_name: license.accounts?.name || '—',
-        email: license.accounts?.email || '—',
-        whatsapp: license.accounts?.whatsapp || null,
+        client_name: acc?.name || '—',
+        email: acc?.email || '—',
+        whatsapp: acc?.whatsapp || null,
         status: license.status,
         expires_at: license.expires_at,
         created_at: license.created_at,
@@ -172,7 +183,7 @@ router.get('/', async (req, res) => {
       };
     });
 
-    res.json(formattedData);
+    res.json(result);
   } catch (err) {
     console.error('[LICENSE LIST EXCEPTION]', {
       message: err.message,
