@@ -124,6 +124,7 @@ router.get('/', async (req, res) => {
         status,
         expires_at,
         created_at,
+        api_key_encrypted,
         account:accounts(id, name, email, whatsapp)
       `)
       .eq('tenant_id', req.tenant.id)
@@ -134,8 +135,19 @@ router.get('/', async (req, res) => {
       return res.status(500).json({ error: 'Failed to list licenses' });
     }
 
-    // Never return api_key or api_key_hash
-    res.json(data);
+    // Format response with masked API key
+    const formattedData = data.map(license => ({
+      id: license.id,
+      client_name: license.account?.name || 'N/A',
+      email: license.account?.email || 'N/A',
+      whatsapp: license.account?.whatsapp || null,
+      status: license.status,
+      expires_at: license.expires_at,
+      created_at: license.created_at,
+      api_key_masked: license.api_key_encrypted ? 'lk_live_****' : 'N/A'
+    }));
+
+    res.json(formattedData);
   } catch (err) {
     console.error('List licenses exception:', err);
     res.status(500).json({ error: 'Internal server error' });
