@@ -126,7 +126,7 @@ router.get('/', async (req, res) => {
         status,
         expires_at,
         created_at,
-        accounts (
+        accounts!fk_licenses_account (
           name,
           email,
           whatsapp
